@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""
+Descarga rápida del dataset «120 years of Olympic history: athletes and results»
+con KaggleHub en la carpeta ./data.
+
+Requisitos previos:
+  pip install kagglehub
+  Colocar tu kaggle.json en ~/.kaggle (o exportar KAGGLE_USERNAME/KAGGLE_KEY).
+
+Uso:
+  python download_data.py
+"""
+
+import kagglehub
+
+# Descarga 
+path = kagglehub.dataset_download(
+    "heesoo37/120-years-of-olympic-history-athletes-and-results",
+    path="data"
+)
+
+print("Dataset descargado en:", path)
