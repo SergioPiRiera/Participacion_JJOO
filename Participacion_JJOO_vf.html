@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'/>
+  <title>Olympic Gender Participation Explorer</title>
+  <script src='https://d3js.org/d3.v7.min.js'></script>
+  <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css'>
+  <style>
+    body{font-family:sans-serif;margin:0;background:#ffffff;}
+    #controls{padding:1rem;background:#f7f7f7;display:flex;flex-wrap:wrap;gap:1rem;align-items:center;}
+    label{font-weight:600;}
+    select,input[type='checkbox']{margin-left:0.5rem;}
+    .tooltip{position:absolute;pointer-events:none;background:rgba(0,0,0,0.7);color:#fff;padding:0.5rem;border-radius:0.25rem;font-size:0.8rem;}
+  </style>
+</head>
+<body>
+<header class="p-4 bg-blue-700 text-white">
+<h1 class="text-xl font-bold">Explorador de la participación en los Juegos Olímpicos (1896‑2016)</h1>
+<p>Comparativa de la evolución del número de atletas a lo largo del tiempo por género, deporte y país.</p>
+</header>
+  <!-- Control panel -->
+  <div id='controls' class='shadow'>
+    <label>Sport
+      <select id='sportSelect' class='border rounded p-1'></select>
+    </label>
+    <label>Country (NOC)
+      <select id='nocSelect' class='border rounded p-1'></select>
+    </label>
+    <label class='flex items-center'>Show % of total
+      <input id='percentCheckbox' type='checkbox' class='ml-2'>
+    </label>
+  </div>
+
+  <!-- SVG chart area -->
+  <svg id='chart'></svg>
+
+<script>
+/**
+ * Olympic Gender Participation Explorer
+ * — D3 v7, Tailwind for basic styling
+ * Filters: Sport, Country (NOC), Absolute / Percent view
+ */
+
+// Settings
+const margin = {top: 40, right: 20, bottom: 40, left: 60};
+const width  = 960 - margin.left - margin.right;
+const height = 500 - margin.top - margin.bottom;
+
+// SVG canvas
+const svg = d3.select('#chart')
+  .attr('width',  width  + margin.left + margin.right)
+  .attr('height', height + margin.top  + margin.bottom)
+  .append('g')
+  .attr('transform', `translate(${margin.left},${margin.top})`);
+
+// Scales & colours
+const xScale = d3.scaleLinear().range([0, width]);
+const yScale = d3.scaleLinear().range([height, 0]);
+const color  = d3.scaleOrdinal().domain(['M', 'F']).range(['#1f77b4', '#e15759']);
+
+// Axis groups
+const xAxisG = svg.append('g').attr('transform', `translate(0,${height})`);
+const yAxisG = svg.append('g');
+
+// Title placeholder (updated on each redraw)
+const title = svg.append('text')
+  .attr('id','chartTitle')
+  .attr('x', width / 2)
+  .attr('y', -10)
+  .attr('text-anchor', 'middle')
+  .attr('class', 'text-xl font-semibold');
+
+// Tooltip div
+const tooltip = d3.select('body').append('div')
+  .attr('class', 'tooltip')
+  .style('opacity', 0);
+
+// Load data
+Promise.all([
+  d3.csv('athlete_events.csv', d3.autoType),
+  d3.csv('noc_regions.csv')
+]).then(([events, regions]) => {
+  // Map NOC → Region name (for dropdown labelling)
+  const regionMap = new Map(regions.map(d => [d.NOC, d.Region]));
+
+  /* ————————— Populate dropdowns ————————— */
+  const sportSelect = d3.select('#sportSelect');
+  sportSelect.append('option').text('All sports').attr('value', 'All');
+  Array.from(new Set(events.map(d => d.Sport))).sort().forEach(s => {
+    sportSelect.append('option').text(s).attr('value', s);
+  });
+
+  const nocSelect = d3.select('#nocSelect');
+  nocSelect.append('option').text('All countries').attr('value', 'All');
+  Array.from(new Set(events.map(d => d.NOC))).sort().forEach(n => {
+    const label = regionMap.get(n) ? `${n} – ${regionMap.get(n)}` : n;
+    nocSelect.append('option').text(label).attr('value', n);
+  });
+
+  // Event listeners
+  sportSelect.on('change', updateChart);
+  nocSelect.on('change',  updateChart);
+  d3.select('#percentCheckbox').on('change', updateChart);
+
+  // Initial draw
+  updateChart();
+
+  /* ————————— Main render function ————————— */
+  function updateChart() {
+    const chosenSport = sportSelect.node().value;
+    const chosenNoc   = nocSelect.node().value;
+    const showPercent = d3.select('#percentCheckbox').property('checked');
+
+    // Filter
+    let filtered = events;
+    if (chosenSport !== 'All') filtered = filtered.filter(d => d.Sport === chosenSport);
+    if (chosenNoc   !== 'All') filtered = filtered.filter(d => d.NOC   === chosenNoc);
+
+    // Aggregate → counts per Year & Sex
+    const rolled = d3.rollups(
+      filtered,
+      v => ({
+        M: v.filter(d => d.Sex === 'M').length,
+        F: v.filter(d => d.Sex === 'F').length,
+        total: v.length
+      }),
+      d => d.Year
+    ).map(([year, vals]) => ({year, ...vals})).sort((a, b) => d3.ascending(a.year, b.year));
+
+    // Convert to % if requested
+    if (showPercent) {
+      rolled.forEach(d => {
+        d.M = d.total ? d.M / d.total * 100 : 0;
+        d.F = d.total ? d.F / d.total * 100 : 0;
+      });
+    }
+
+    // Scales domain
+    yScale.domain([0, showPercent ? 100 : d3.max(rolled, d => Math.max(d.M, d.F))]).nice();
+    xScale.domain(d3.extent(rolled, d => d.year));
+
+    // Draw axes
+    yAxisG.transition().duration(500)
+      .call(d3.axisLeft(yScale).ticks(showPercent ? 5 : undefined).tickFormat(showPercent ? d => d + '%' : undefined));
+    xAxisG.transition().duration(500)
+      .call(d3.axisBottom(xScale).tickFormat(d3.format('d')));
+
+    // Title update
+    const sportLabel = chosenSport === 'All' ? 'All sports' : chosenSport;
+    const nocLabel   = chosenNoc === 'All' ? 'All countries' : (regionMap.get(chosenNoc) || chosenNoc);
+    title.text(`${sportLabel} – ${nocLabel}`);
+
+    // Prepare series data for lines & circles
+    const line = d3.line().x(d => xScale(d.year)).y(d => yScale(d.value));
+    const sexData = ['M', 'F'].map(sex => ({
+      sex,
+      values: rolled.map(d => ({year: d.year, value: d[sex]}))
+    }));
+
+    /* — Lines — */
+    const lines = svg.selectAll('.gender-line').data(sexData, d => d.sex);
+
+    lines.enter().append('path')
+        .attr('class', 'gender-line')
+        .attr('fill', 'none')
+        .attr('stroke', d => color(d.sex))
+        .attr('stroke-width', 2)
+      .merge(lines)
+        .transition().duration(750)
+        .attr('d', d => line(d.values));
+
+    lines.exit().remove();
+
+    /* — Circles — */
+    const circles = svg.selectAll('.gender-circle')
+      .data(
+        sexData.flatMap(s => s.values.map(v => ({...v, sex: s.sex}))),
+        d => d.sex + '-' + d.year // key function
+      );
+
+    circles.enter().append('circle')
+        .attr('class', 'gender-circle')
+        .attr('r', 3)
+        .attr('fill', d => color(d.sex))
+        .on('mouseover', (event, d) => {
+          tooltip.style('opacity', 1)
+            .html(`<strong>${d.sex === 'M' ? 'Men' : 'Women'}</strong><br/>Year: ${d.year}<br/>` +
+                  (showPercent ? d.value.toFixed(1) + ' %' : d.value))
+            .style('left', (event.pageX + 10) + 'px')
+            .style('top',  (event.pageY - 28) + 'px');
+        })
+        .on('mouseout', () => tooltip.style('opacity', 0))
+      .merge(circles)
+        .transition().duration(750)
+        .attr('cx', d => xScale(d.year))
+        .attr('cy', d => yScale(d.value));
+
+    circles.exit().remove();
+  }
+});
+</script>
+</body>
+</html>
